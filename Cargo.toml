@@ -1,8 +1,13 @@
 [package]
 name = "discrimination-tree"
+description = "discrimination tree term indexing"
 version = "0.1.0"
-authors = ["Michael Rawson <michael@rawsons.uk>"]
 edition = "2018"
+authors = ["Michael Rawson <michael@rawsons.uk>"]
+license = "MIT"
+homepage = "https://github.com/MichaelRawson/discrimination-tree"
+keywords = ["term", "index"]
+readme = "README.md"
 
 [dependencies]
 id-arena = "2.2"
