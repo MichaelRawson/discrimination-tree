@@ -1,4 +1,8 @@
-use id_arena::{Arena, Id};
+mod arena;
+#[cfg(test)]
+mod tests;
+
+use arena::{Arena, Id};
 use std::collections::{BTreeMap, HashMap};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -290,6 +294,3 @@ impl<'term, 'index, Symbol: Ord, T> Iterator
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

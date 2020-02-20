@@ -91,10 +91,7 @@ fn unification() {
     let index = build_index();
     let query = function(
         "f",
-        vec![
-            function("g", vec![constant("b"), X]),
-            constant("a"),
-        ],
+        vec![function("g", vec![constant("b"), X]), constant("a")],
     );
     let mut unifiers = index.possible_unifiers(&query);
     assert_eq!(unifiers.next(), Some(&6));
