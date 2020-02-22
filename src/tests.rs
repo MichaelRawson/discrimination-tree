@@ -99,3 +99,15 @@ fn unification() {
     assert_eq!(unifiers.next(), Some(&5));
     assert_eq!(unifiers.next(), None);
 }
+
+#[test]
+fn var_var() {
+    let px = function("p", vec![Variable]);
+    let mut index: Index<&'static str, u32> = Index::new();
+    index.insert(px, 0);
+
+    let query = function("p", vec![Variable]);
+    let mut unifiers = index.possible_unifiers(&query);
+    assert_eq!(unifiers.next(), Some(&0));
+    assert_eq!(unifiers.next(), None);
+}

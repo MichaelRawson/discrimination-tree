@@ -187,6 +187,7 @@ impl<Symbol: Ord, T> Index<Symbol, T> {
             match top {
                 Term::Variable => {
                     *variable_child = Some(next);
+                    jump_from.push((current, 0));
                 }
                 Term::Function(f, args) => {
                     let arity = args.len() as u32;
