@@ -4,13 +4,15 @@ mod tests;
 
 use arena::{Arena, Id};
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct SymbolId(u32);
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct Arity(u32);
 
+#[derive(Clone, PartialEq, Eq, Debug)]
 struct Leaf<T> {
     stored: Vec<T>,
 }
@@ -22,6 +24,7 @@ impl<T> Leaf<T> {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Debug)]
 struct Branch<T> {
     variable_child: Option<Id<Node<T>>>,
     jump_list: Vec<Id<Node<T>>>,
@@ -38,18 +41,44 @@ impl<T> Branch<T> {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Debug)]
 enum Node<T> {
     Leaf(Leaf<T>),
     Branch(Branch<T>),
 }
 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Term<Symbol> {
     Variable,
     Function(Symbol, Vec<Self>),
 }
 
+impl<Symbol: fmt::Display> fmt::Display for Term<Symbol> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Term::Variable => write!(f, "*"),
+            Term::Function(symbol, ts) => {
+                write!(f, "{}", symbol)?;
+                if !ts.is_empty() {
+                    write!(f, "(")?;
+                    let mut ts = ts.iter();
+                    if let Some(first) = ts.next() {
+                        write!(f, "{}", first)?;
+                    }
+                    for t in ts {
+                        write!(f, ", {}", t)?;
+                    }
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 type ConnectionKey<T> = (Id<Node<T>>, SymbolId, Arity);
 
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Index<Symbol, T> {
     symbols: BTreeMap<Symbol, SymbolId>,
     nodes: Arena<Node<T>>,
@@ -192,8 +221,8 @@ impl<Symbol: Ord, T> Index<Symbol, T> {
     pub fn possible_unifiers<'index, 'term>(
         &'index self,
         query: &'term Term<Symbol>,
-    ) -> UnificationQueryIterator<'term, 'index, Symbol, T> {
-        UnificationQueryIterator {
+    ) -> PossibleUnifiers<'term, 'index, Symbol, T> {
+        PossibleUnifiers {
             index: self,
             todo: vec![ChoicePoint {
                 location: self.root,
@@ -210,19 +239,41 @@ impl<Symbol: Ord, T> Default for Index<Symbol, T> {
     }
 }
 
+impl<Symbol: Ord, T> std::iter::FromIterator<(Term<Symbol>, T)>
+    for Index<Symbol, T>
+{
+    fn from_iter<I: IntoIterator<Item = (Term<Symbol>, T)>>(iter: I) -> Self {
+        let mut result = Self::new();
+        for (term, item) in iter {
+            result.insert(term, item);
+        }
+        result
+    }
+}
+
+impl<Symbol: Ord, T> std::iter::Extend<(Term<Symbol>, T)>
+    for Index<Symbol, T>
+{
+    fn extend<I: IntoIterator<Item = (Term<Symbol>, T)>>(&mut self, iter: I) {
+        for (term, item) in iter {
+            self.insert(term, item);
+        }
+    }
+}
+
 struct ChoicePoint<'term, Symbol, T> {
     location: Id<Node<T>>,
     parts: Vec<&'term Term<Symbol>>,
 }
 
-pub struct UnificationQueryIterator<'term, 'index, Symbol, T> {
+pub struct PossibleUnifiers<'term, 'index, Symbol, T> {
     index: &'index Index<Symbol, T>,
     todo: Vec<ChoicePoint<'term, Symbol, T>>,
     current: <&'index [T] as IntoIterator>::IntoIter,
 }
 
 impl<'term, 'index, Symbol: Ord, T>
-    UnificationQueryIterator<'term, 'index, Symbol, T>
+    PossibleUnifiers<'term, 'index, Symbol, T>
 {
     fn step(&mut self) {
         let mut selected = self.todo.pop().unwrap();
@@ -279,7 +330,7 @@ impl<'term, 'index, Symbol: Ord, T>
 }
 
 impl<'term, 'index, Symbol: Ord, T> Iterator
-    for UnificationQueryIterator<'term, 'index, Symbol, T>
+    for PossibleUnifiers<'term, 'index, Symbol, T>
 {
     type Item = &'index T;
 

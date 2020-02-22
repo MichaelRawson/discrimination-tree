@@ -2,6 +2,7 @@ use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 
+#[derive(Debug)]
 pub struct Id<T> {
     index: u32,
     _phantom: PhantomData<T>,
@@ -30,6 +31,7 @@ impl<T> Hash for Id<T> {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Arena<T>(Vec<T>);
 
 impl<T> Arena<T> {
