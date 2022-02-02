@@ -1,8 +1,8 @@
 [package]
 name = "discrimination-tree"
 description = "discrimination tree term indexing"
-version = "0.2.1"
-edition = "2018"
+version = "0.3.0"
+edition = "2021"
 exclude = ["rustfmt.toml"]
 authors = ["Michael Rawson <michael@rawsons.uk>"]
 license = "MIT"

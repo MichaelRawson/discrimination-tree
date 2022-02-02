@@ -1,348 +1,267 @@
-mod arena;
 #[cfg(test)]
 mod tests;
+mod util;
 
-use arena::{Arena, Id};
-use std::collections::{BTreeMap, HashMap};
-use std::fmt;
+use crate::util::SortedMap;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-struct SymbolId(u32);
+fn report_bad_state() -> ! {
+    panic!(
+        "\
+bad state detected - this could mean:
+    1. inserted keys are not proper traversals of well-formed terms, or
+    2. identical symbols have been used with different arities"
+    );
+}
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-struct Arity(u32);
+pub trait Symbol: Ord {
+    fn arity(&self) -> usize;
+}
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+fn find_next_term<S: Symbol>(key: &[Option<S>], mut index: usize) -> usize {
+    let mut remaining = 1;
+    while remaining > 0 {
+        remaining +=
+            key[index].as_ref().map(|s| s.arity()).unwrap_or_default();
+        remaining -= 1;
+        index += 1;
+        if index > key.len() {
+            report_bad_state()
+        }
+    }
+    index
+}
+
+#[derive(Debug, Clone)]
 struct Leaf<T> {
-    stored: Vec<T>,
+    data: T,
 }
 
-impl<T> Leaf<T> {
-    fn new() -> Self {
-        let stored = vec![];
-        Leaf { stored }
-    }
+#[derive(Debug, Clone)]
+struct Branch<S, T> {
+    symbols: SortedMap<S, Node<S, T>>,
+    variable: Option<Box<Node<S, T>>>,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
-struct Branch<T> {
-    variable_child: Option<Id<Node<T>>>,
-    jump_list: Vec<Id<Node<T>>>,
-}
-
-impl<T> Branch<T> {
-    fn new() -> Self {
-        let variable_child = None;
-        let jump_list = vec![];
-        Branch {
-            variable_child,
-            jump_list,
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-enum Node<T> {
-    Leaf(Leaf<T>),
-    Branch(Branch<T>),
-}
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Term<Symbol> {
-    Variable,
-    Function(Symbol, Vec<Self>),
-}
-
-impl<Symbol: fmt::Display> fmt::Display for Term<Symbol> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Term::Variable => write!(f, "*"),
-            Term::Function(symbol, ts) => {
-                write!(f, "{}", symbol)?;
-                if !ts.is_empty() {
-                    write!(f, "(")?;
-                    let mut ts = ts.iter();
-                    if let Some(first) = ts.next() {
-                        write!(f, "{}", first)?;
-                    }
-                    for t in ts {
-                        write!(f, ", {}", t)?;
-                    }
-                    write!(f, ")")?;
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-type ConnectionKey<T> = (Id<Node<T>>, SymbolId, Arity);
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Index<Symbol, T> {
-    symbols: BTreeMap<Symbol, SymbolId>,
-    nodes: Arena<Node<T>>,
-    root: Id<Node<T>>,
-    connections: HashMap<ConnectionKey<T>, Id<Node<T>>>,
-}
-
-impl<Symbol: Ord, T> Index<Symbol, T> {
-    pub fn new() -> Self {
-        let symbols = BTreeMap::new();
-        let mut nodes = Arena::new();
-        let root = nodes.alloc(Node::Branch(Branch::new()));
-        let connections = HashMap::new();
-        Index {
-            symbols,
-            nodes,
-            root,
-            connections,
-        }
-    }
-
-    fn lookup_symbol(&self, symbol: &Symbol) -> Option<SymbolId> {
-        self.symbols.get(symbol).cloned()
-    }
-
-    fn store_symbol(&mut self, symbol: Symbol) -> SymbolId {
-        let id = SymbolId(self.symbols.len() as u32);
-        *self.symbols.entry(symbol).or_insert(id)
-    }
-
-    fn get_branch(&self, node: Id<Node<T>>) -> &Branch<T> {
-        match &self.nodes[node] {
-            Node::Branch(branch) => branch,
-            _ => unreachable!(),
-        }
-    }
-
-    fn get_branch_mut(&mut self, node: Id<Node<T>>) -> &mut Branch<T> {
-        match &mut self.nodes[node] {
-            Node::Branch(branch) => branch,
-            _ => unreachable!(),
-        }
-    }
-
-    fn get_leaf(&self, node: Id<Node<T>>) -> &Leaf<T> {
-        match &self.nodes[node] {
-            Node::Leaf(leaf) => leaf,
-            _ => unreachable!(),
-        }
-    }
-
-    fn get_leaf_mut(&mut self, node: Id<Node<T>>) -> &mut Leaf<T> {
-        match &mut self.nodes[node] {
-            Node::Leaf(leaf) => leaf,
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn insert(&mut self, term: Term<Symbol>, store: T) {
-        let mut current = self.root;
-        let mut todo = vec![term];
-        let mut jump_from = vec![];
-
-        // traverse existing index
-        while let Some(top) = todo.pop() {
-            let Branch { variable_child, .. } = self.get_branch(current);
-            match top {
-                Term::Variable => {
-                    if let Some(next) = variable_child {
-                        current = *next;
-                    } else {
-                        todo.push(Term::Variable);
-                        break;
-                    }
-                }
-                Term::Function(f, args) => {
-                    let arity = args.len() as u32;
-                    if let Some(id) = self.lookup_symbol(&f) {
-                        let key = (current, id, Arity(arity));
-                        if let Some(next) = self.connections.get(&key) {
-                            todo.extend(args.into_iter().rev());
-                            jump_from.push((current, arity));
-                            current = *next;
-                        } else {
-                            todo.push(Term::Function(f, args));
-                            break;
-                        }
-                    } else {
-                        todo.push(Term::Function(f, args));
-                        break;
-                    }
-                }
-            }
-            while let Some((from, depth)) = jump_from.pop() {
-                if depth != 0 {
-                    jump_from.push((from, depth - 1));
-                    break;
-                }
-            }
-        }
-
-        //insert new nodes as required
-        while let Some(top) = todo.pop() {
-            let next = self.nodes.next_id();
-            let Branch { variable_child, .. } = self.get_branch_mut(current);
-            match top {
-                Term::Variable => {
-                    *variable_child = Some(next);
-                    jump_from.push((current, 0));
-                }
-                Term::Function(f, args) => {
-                    let arity = args.len() as u32;
-                    let key = (current, self.store_symbol(f), Arity(arity));
-                    self.connections.insert(key, next);
-                    todo.extend(args.into_iter().rev());
-                    jump_from.push((current, arity));
-                }
-            }
-            let node = if todo.is_empty() {
-                Node::Leaf(Leaf::new())
-            } else {
-                Node::Branch(Branch::new())
-            };
-            self.nodes.alloc(node);
-            current = next;
-
-            while let Some((from, depth)) = jump_from.pop() {
-                if depth == 0 {
-                    self.get_branch_mut(from).jump_list.push(current);
-                } else {
-                    jump_from.push((from, depth - 1));
-                    break;
-                }
-            }
-        }
-
-        // add stored data
-        self.get_leaf_mut(current).stored.push(store);
-    }
-
-    pub fn possible_unifiers<'index, 'term>(
-        &'index self,
-        query: &'term Term<Symbol>,
-    ) -> PossibleUnifiers<'term, 'index, Symbol, T> {
-        PossibleUnifiers {
-            index: self,
-            todo: vec![ChoicePoint {
-                location: self.root,
-                parts: vec![query],
-            }],
-            current: [].iter(),
-        }
-    }
-}
-
-impl<Symbol: Ord, T> Default for Index<Symbol, T> {
+impl<S, T> Default for Branch<S, T> {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<Symbol: Ord, T> std::iter::FromIterator<(Term<Symbol>, T)>
-    for Index<Symbol, T>
-{
-    fn from_iter<I: IntoIterator<Item = (Term<Symbol>, T)>>(iter: I) -> Self {
-        let mut result = Self::new();
-        for (term, item) in iter {
-            result.insert(term, item);
-        }
-        result
-    }
-}
-
-impl<Symbol: Ord, T> std::iter::Extend<(Term<Symbol>, T)>
-    for Index<Symbol, T>
-{
-    fn extend<I: IntoIterator<Item = (Term<Symbol>, T)>>(&mut self, iter: I) {
-        for (term, item) in iter {
-            self.insert(term, item);
+        Self {
+            symbols: SortedMap::default(),
+            variable: None,
         }
     }
 }
 
-struct ChoicePoint<'term, Symbol, T> {
-    location: Id<Node<T>>,
-    parts: Vec<&'term Term<Symbol>>,
-}
-
-pub struct PossibleUnifiers<'term, 'index, Symbol, T> {
-    index: &'index Index<Symbol, T>,
-    todo: Vec<ChoicePoint<'term, Symbol, T>>,
-    current: <&'index [T] as IntoIterator>::IntoIter,
-}
-
-impl<'term, 'index, Symbol: Ord, T>
-    PossibleUnifiers<'term, 'index, Symbol, T>
-{
-    fn step(&mut self) {
-        let mut selected = self.todo.pop().unwrap();
-        // leaf node, term exhausted
-        if selected.parts.is_empty() {
-            self.current =
-                self.index.get_leaf(selected.location).stored.iter();
-            return;
+impl<S: Ord, T> Branch<S, T> {
+    pub(crate) fn get(&self, item: &Option<S>) -> Option<&Node<S, T>> {
+        if let Some(symbol) = item {
+            self.symbols.get(symbol)
+        } else {
+            self.variable.as_deref()
         }
+    }
 
-        let branch = self.index.get_branch(selected.location);
-        let top = selected.parts.pop().unwrap();
-        match top {
-            Term::Function(f, args) => {
-                // variable children
-                if let Some(next) = branch.variable_child {
-                    self.todo.push(ChoicePoint {
-                        location: next,
-                        parts: selected.parts.clone(),
-                    });
+    pub(crate) fn get_or_insert_empty_branch(
+        &mut self,
+        item: Option<S>,
+    ) -> (bool, &mut Node<S, T>) {
+        let mut inserted = false;
+        let mut empty_branch = || {
+            inserted = true;
+            Node::Branch(Branch::default())
+        };
+        let node = if let Some(symbol) = item {
+            self.symbols.get_or_insert_with(symbol, empty_branch)
+        } else {
+            self.variable
+                .get_or_insert_with(|| Box::new(empty_branch()))
+        };
+        (inserted, node)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Node<S, T> {
+    Leaf(Leaf<T>),
+    Branch(Branch<S, T>),
+}
+
+struct Results<'a, S, T> {
+    found: Vec<&'a T>,
+    todo: Vec<(&'a Branch<S, T>, usize)>,
+    skip: Vec<(&'a Branch<S, T>, usize, usize)>,
+    generalise: bool,
+    instantiate: bool,
+}
+
+impl<'a, S: Symbol, T> Results<'a, S, T> {
+    fn add_todo(
+        &mut self,
+        key: &[Option<S>],
+        node: &'a Node<S, T>,
+        index: usize,
+    ) {
+        match node {
+            Node::Leaf(leaf) => {
+                if index != key.len() {
+                    report_bad_state()
                 }
-                // symbol children
-                if let Some(id) = self.index.lookup_symbol(f) {
-                    let key =
-                        (selected.location, id, Arity(args.len() as u32));
-                    if let Some(next) = self.index.connections.get(&key) {
-                        match &self.index.nodes[*next] {
-                            Node::Branch(_) => {
-                                let mut parts = selected.parts;
-                                parts.extend(args.iter().rev());
-                                self.todo.push(ChoicePoint {
-                                    location: *next,
-                                    parts,
-                                });
-                            }
-                            Node::Leaf(Leaf { stored }) => {
-                                self.current = stored.iter();
-                            }
-                        }
-                    }
-                }
+                self.found.push(&leaf.data);
             }
-            // jump over query variables
-            Term::Variable => {
-                for jump in &branch.jump_list {
-                    self.todo.push(ChoicePoint {
-                        location: *jump,
-                        parts: selected.parts.clone(),
-                    });
-                }
-            }
+            Node::Branch(branch) => self.todo.push((branch, index)),
         }
     }
-}
 
-impl<'term, 'index, Symbol: Ord, T> Iterator
-    for PossibleUnifiers<'term, 'index, Symbol, T>
-{
-    type Item = &'index T;
+    fn add_skip(
+        &mut self,
+        key: &[Option<S>],
+        node: &'a Node<S, T>,
+        index: usize,
+        remaining: usize,
+    ) {
+        if remaining == 0 {
+            self.add_todo(key, node, index);
+        } else if let Node::Branch(branch) = node {
+            self.skip.push((branch, index, remaining));
+        } else {
+            report_bad_state()
+        }
+    }
 
-    fn next(&mut self) -> Option<&'index T> {
+    fn do_skip_symbols(
+        &mut self,
+        key: &[Option<S>],
+        branch: &'a Branch<S, T>,
+        index: usize,
+        remaining: usize,
+    ) {
+        let remaining = remaining - 1;
+        for (symbol, node) in branch.symbols.iter() {
+            let remaining = remaining + symbol.arity();
+            self.add_skip(key, node, index, remaining);
+        }
+    }
+
+    fn do_skip(
+        &mut self,
+        key: &[Option<S>],
+        branch: &'a Branch<S, T>,
+        index: usize,
+        remaining: usize,
+    ) {
+        self.do_skip_symbols(key, branch, index, remaining);
+        if let Some(variable) = branch.variable.as_deref() {
+            self.add_skip(key, variable, index, remaining - 1);
+        }
+    }
+
+    fn do_todo(
+        &mut self,
+        key: &[Option<S>],
+        branch: &'a Branch<S, T>,
+        index: usize,
+    ) {
+        if index >= key.len() {
+            report_bad_state()
+        }
+        let head = &key[index];
+        // exact matches: f = f, * = *
+        if let Some(node) = branch.get(head) {
+            self.add_todo(key, node, index + 1);
+        }
+        // generalisations
+        if self.generalise && head.is_some() {
+            if let Some(node) = branch.variable.as_deref() {
+                self.add_todo(key, node, find_next_term(key, index));
+            }
+        }
+        // instantiations
+        if self.instantiate && head.is_none() {
+            self.do_skip_symbols(key, branch, index + 1, 1);
+        }
+    }
+
+    fn next(&mut self, key: &[Option<S>]) -> Option<&'a T> {
         loop {
-            if let Some(next) = self.current.next() {
-                return Some(next);
-            } else if self.todo.is_empty() {
+            if let Some(found) = self.found.pop() {
+                return Some(found);
+            }
+            if let Some((branch, index)) = self.todo.pop() {
+                self.do_todo(key, branch, index);
+            } else if let Some((branch, index, remaining)) = self.skip.pop() {
+                self.do_skip(key, branch, index, remaining);
+            } else {
                 return None;
             }
-            self.step();
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DiscriminationTree<S, T> {
+    root: Branch<S, T>,
+}
+
+impl<S, T> Default for DiscriminationTree<S, T> {
+    fn default() -> Self {
+        Self {
+            root: Branch::default(),
+        }
+    }
+}
+
+impl<S: Symbol, T> DiscriminationTree<S, T> {
+    pub fn get_or_insert_with<
+        I: IntoIterator<Item = Option<S>>,
+        F: FnOnce() -> T,
+    >(
+        &mut self,
+        key: I,
+        insert: F,
+    ) -> &mut T {
+        let mut current = &mut self.root;
+        let mut remaining = 1;
+        for item in key {
+            remaining -= 1;
+            remaining += item.as_ref().map(|s| s.arity()).unwrap_or_default();
+
+            let (inserted, node) = current.get_or_insert_empty_branch(item);
+            if remaining == 0 {
+                if inserted {
+                    *node = Node::Leaf(Leaf { data: insert() });
+                    if let Node::Leaf(leaf) = node {
+                        return &mut leaf.data;
+                    } else {
+                        unreachable!();
+                    }
+                } else if let Node::Leaf(leaf) = node {
+                    return &mut leaf.data;
+                } else {
+                    report_bad_state()
+                }
+            }
+            if let Node::Branch(branch) = node {
+                current = branch;
+            } else {
+                report_bad_state()
+            }
+        }
+        report_bad_state()
+    }
+
+    pub fn query<I: IntoIterator<Item = Option<S>>>(
+        &self,
+        key: I,
+        generalise: bool,
+        instantiate: bool,
+    ) -> impl Iterator<Item = &T> {
+        let key = key.into_iter().collect::<Vec<_>>();
+        let mut results = Results {
+            found: vec![],
+            todo: vec![(&self.root, 0)],
+            skip: vec![],
+            generalise,
+            instantiate,
+        };
+        std::iter::from_fn(move || results.next(&key))
     }
 }

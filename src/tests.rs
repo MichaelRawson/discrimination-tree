@@ -1,113 +1,88 @@
 use crate::*;
-use Term::Variable as X;
-use Term::*;
+use std::fmt;
 
-fn constant(c: &'static str) -> Term<&'static str> {
-    Function(c, vec![])
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct S(&'static str, usize);
+
+impl fmt::Debug for S {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.0, self.0)
+    }
 }
 
-fn function(
-    f: &'static str,
-    children: Vec<Term<&'static str>>,
-) -> Term<&'static str> {
-    Function(f, children)
+impl Symbol for S {
+    fn arity(&self) -> usize {
+        self.1
+    }
 }
 
-fn build_index() -> Index<&'static str, u32> {
-    let mut index = Index::new();
+const A: S = S("a", 0);
+const B: S = S("b", 0);
+const C: S = S("c", 0);
+const F: S = S("f", 2);
+const G: S = S("g", 2);
 
-    // f(g(a, *), c)
-    index.insert(
-        function(
-            "f",
-            vec![function("g", vec![constant("a"), X]), constant("c")],
-        ),
-        1,
-    );
-    // f(g(*, b), *)
-    index.insert(
-        function("f", vec![function("g", vec![X, constant("b")]), X]),
-        2,
-    );
-    // f(g(a, b), a)
-    index.insert(
-        function(
-            "f",
-            vec![
-                function("g", vec![constant("a"), constant("b")]),
-                constant("a"),
-            ],
-        ),
-        3,
-    );
-    // f(g(*, c), b)
-    index.insert(
-        function(
-            "f",
-            vec![function("g", vec![X, constant("c")]), constant("b")],
-        ),
-        4,
-    );
-    // f(*, *)
-    index.insert(function("f", vec![X, X]), 5);
-    // f(g(b, c), *)
-    index.insert(
-        function(
-            "f",
-            vec![function("g", vec![constant("b"), constant("c")]), X],
-        ),
-        6,
-    );
+fn build_tree() -> DiscriminationTree<S, usize> {
+    let mut tree = DiscriminationTree::default();
+    let zero = || 0;
 
-    index
+    // f(g(a, *), c) -> 1
+    *tree.get_or_insert_with(
+        [Some(F), Some(G), Some(A), None, Some(C)],
+        zero,
+    ) = 1;
+    // f(g(*, b), *) -> 2
+    *tree.get_or_insert_with([Some(F), Some(G), None, Some(B), None], zero) =
+        2;
+    // f(g(a, b), a) -> 3
+    *tree.get_or_insert_with(
+        [Some(F), Some(G), Some(A), Some(B), Some(A)],
+        zero,
+    ) = 3;
+    // f(g(*, c), b) -> 4
+    *tree.get_or_insert_with(
+        [Some(F), Some(G), None, Some(C), Some(B)],
+        zero,
+    ) = 4;
+    // f(*, *) -> 5
+    *tree.get_or_insert_with([Some(F), None, None], zero) = 5;
+    // f(g(b, c), *) -> 6
+    *tree.get_or_insert_with(
+        vec![Some(F), Some(G), Some(B), Some(C), None],
+        zero,
+    ) = 6;
+
+    tree
 }
 
 #[test]
-fn insertion() {
-    let index = build_index();
-    assert_eq!(index.symbols.len(), 5);
-    assert_eq!(index.nodes.len(), 18);
-    assert_eq!(index.connections.len(), 11);
+fn exact() {
+    let tree = build_tree();
+    assert!(tree
+        .query([Some(F), Some(G), Some(A), None, Some(C)], false, false)
+        .eq(&[1]));
 }
 
 #[test]
 fn generalisation() {
-    let index = build_index();
-    let query = function(
-        "f",
-        vec![
-            function("g", vec![constant("a"), constant("c")]),
-            constant("b"),
-        ],
-    );
-    let mut unifiers = index.possible_unifiers(&query);
-    assert_eq!(unifiers.next(), Some(&4));
-    assert_eq!(unifiers.next(), Some(&5));
-    assert_eq!(unifiers.next(), None);
+    let tree = build_tree();
+    assert!(tree
+        .query([Some(F), Some(G), Some(A), Some(C), Some(B)], true, false)
+        .eq(&[5, 4]));
+}
+
+#[test]
+fn instantiation() {
+    let tree = build_tree();
+    assert!(tree
+        .query([Some(F), None, None], false, true)
+        .eq(&[5, 4, 2, 6, 1, 3]));
 }
 
 #[test]
 fn unification() {
-    let index = build_index();
-    let query = function(
-        "f",
-        vec![function("g", vec![constant("b"), X]), constant("a")],
-    );
-    let mut unifiers = index.possible_unifiers(&query);
-    assert_eq!(unifiers.next(), Some(&6));
-    assert_eq!(unifiers.next(), Some(&2));
-    assert_eq!(unifiers.next(), Some(&5));
-    assert_eq!(unifiers.next(), None);
-}
-
-#[test]
-fn var_var() {
-    let px = function("p", vec![Variable]);
-    let mut index: Index<&'static str, u32> = Index::new();
-    index.insert(px, 0);
-
-    let query = function("p", vec![Variable]);
-    let mut unifiers = index.possible_unifiers(&query);
-    assert_eq!(unifiers.next(), Some(&0));
-    assert_eq!(unifiers.next(), None);
+    let tree = build_tree();
+    assert!(tree
+        .query([Some(F), Some(G), None, Some(B), None], true, true)
+        .eq(&[5, 1, 3, 2]));
 }
